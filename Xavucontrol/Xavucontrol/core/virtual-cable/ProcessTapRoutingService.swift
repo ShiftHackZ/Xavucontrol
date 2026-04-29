@@ -18,16 +18,24 @@ actor ProcessTapRoutingService {
     private var sessions: [String: ProcessTapRouteSession] = [:]
 
     func route(stream: AppAudioStream, to targetDevice: AudioDevice) async throws -> String {
-        try await route(stream: stream, to: targetDevice, requireAudibleSignal: false)
+        try await route(stream: stream, to: [targetDevice], requireAudibleSignal: false)
     }
 
     func routeConfirmed(stream: AppAudioStream, to targetDevice: AudioDevice, timeout: TimeInterval = 1.5) async throws -> String {
-        try await route(stream: stream, to: targetDevice, requireAudibleSignal: true, timeout: timeout)
+        try await route(stream: stream, to: [targetDevice], requireAudibleSignal: true, timeout: timeout)
+    }
+
+    func route(stream: AppAudioStream, to targetDevices: [AudioDevice]) async throws -> String {
+        try await route(stream: stream, to: targetDevices, requireAudibleSignal: false)
+    }
+
+    func routeConfirmed(stream: AppAudioStream, to targetDevices: [AudioDevice], timeout: TimeInterval = 1.5) async throws -> String {
+        try await route(stream: stream, to: targetDevices, requireAudibleSignal: true, timeout: timeout)
     }
 
     private func route(
         stream: AppAudioStream,
-        to targetDevice: AudioDevice,
+        to targetDevices: [AudioDevice],
         requireAudibleSignal: Bool,
         timeout: TimeInterval = 1.5
     ) async throws -> String {
@@ -40,9 +48,21 @@ actor ProcessTapRoutingService {
         }
         let processObjectIDs = ProcessTapRoutingService.relatedOutputProcessObjectIDs(for: processObjectID)
 
-        guard let targetDeviceObjectID = targetDevice.coreAudioObjectID else {
-            throw ProcessTapRouteError(message: "Target device has no Core Audio object ID")
+        let targets = targetDevices.compactMap { device -> ProcessTapOutputTarget? in
+            guard let objectID = device.coreAudioObjectID else {
+                return nil
+            }
+            return ProcessTapOutputTarget(deviceID: device.id, objectID: objectID, name: device.name)
         }
+        guard !targets.isEmpty else {
+            throw ProcessTapRouteError(message: "No selected output device has a Core Audio object ID")
+        }
+        NSLog(
+            "Xavucontrol process tap fanout start %@ targets=%d [%@]",
+            stream.appName,
+            targets.count,
+            targets.map(\.name).joined(separator: ", ")
+        )
 
         let sourceDeviceUID = ProcessTapRoutingService.sourceDeviceUID(
             processObjectID: processObjectID,
@@ -59,8 +79,7 @@ actor ProcessTapRoutingService {
             processObjectIDs: processObjectIDs,
             appName: stream.appName,
             sourceDeviceUID: sourceDeviceUID,
-            targetDeviceObjectID: targetDeviceObjectID,
-            targetDeviceName: targetDevice.name,
+            outputTargets: targets,
             initialVolume: stream.volume,
             initiallyMuted: stream.isMuted
         )
@@ -75,12 +94,17 @@ actor ProcessTapRoutingService {
         }
         sessions[stream.id] = session
 
-        return "Process tap route active: \(stream.appName) -> \(targetDevice.name) from \(sourceDeviceUID) using \(processObjectIDs.count) process tap candidate(s)"
+        let targetNames = targets.map(\.name).joined(separator: ", ")
+        return "Process tap fan-out route active: \(stream.appName) -> \(targetNames) from \(sourceDeviceUID) using \(processObjectIDs.count) process tap candidate(s)"
     }
 
     func stop(streamID: String) {
         sessions[streamID]?.stop()
         sessions[streamID] = nil
+    }
+
+    func stop(streamID: String, targetDeviceID: String) {
+        stop(streamID: streamID)
     }
 
     func stopAll() {
@@ -562,28 +586,27 @@ private nonisolated final class ProcessTapProbeSession {
     }
 }
 
+private struct ProcessTapOutputTarget {
+    let deviceID: AudioDevice.ID
+    let objectID: AudioObjectID
+    let name: String
+}
+
 private nonisolated final class ProcessTapRouteSession {
     private let streamID: String
     private let processObjectIDs: [AudioObjectID]
     private let appName: String
     private let sourceDeviceUID: String
-    private let targetDeviceObjectID: AudioObjectID
-    private let targetDeviceName: String
-    private let ringBuffer = ByteRingBuffer(capacity: 48_000 * 4 * 4)
+    private let outputTargets: [ProcessTapOutputTarget]
+    private var outputSinks: [ProcessTapOutputSink] = []
     private var tapFormat = AudioStreamBasicDescription()
     private var outputFormat = ProcessTapRouteSession.outputFormat(sampleRate: 48_000)
 
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
-    private var queue: AudioQueueRef?
-    private var queueBuffers: [AudioQueueBufferRef] = []
     private var diagnosticsTimer: DispatchSourceTimer?
-    private var requestedOutputDeviceUID = ""
-    private var actualOutputDeviceUID = ""
     private var capturedBytes: UInt64 = 0
-    private var playedBytes: UInt64 = 0
-    private var underflowCount: UInt64 = 0
     private var callbackCount: UInt64 = 0
     private var emptyCallbackCount: UInt64 = 0
     private var lastInputBufferCount: UInt32 = 0
@@ -600,8 +623,7 @@ private nonisolated final class ProcessTapRouteSession {
         processObjectIDs: [AudioObjectID],
         appName: String,
         sourceDeviceUID: String,
-        targetDeviceObjectID: AudioObjectID,
-        targetDeviceName: String,
+        outputTargets: [ProcessTapOutputTarget],
         initialVolume: Double,
         initiallyMuted: Bool
     ) {
@@ -609,8 +631,7 @@ private nonisolated final class ProcessTapRouteSession {
         self.processObjectIDs = processObjectIDs
         self.appName = appName
         self.sourceDeviceUID = sourceDeviceUID
-        self.targetDeviceObjectID = targetDeviceObjectID
-        self.targetDeviceName = targetDeviceName
+        self.outputTargets = outputTargets
         self.volumeGain = Float32(max(0, min(1, initialVolume)))
         self.muted = initiallyMuted
     }
@@ -651,7 +672,7 @@ private nonisolated final class ProcessTapRouteSession {
         }
         outputFormat = ProcessTapRouteSession.outputFormat(sampleRate: tapFormat.mSampleRate)
 
-        try startOutputQueue(format: outputFormat)
+        try startOutputSinks(format: outputFormat)
         try startTapInput()
         startDiagnosticsTimer()
         didStart = true
@@ -687,12 +708,8 @@ private nonisolated final class ProcessTapRouteSession {
         diagnosticsTimer?.cancel()
         diagnosticsTimer = nil
 
-        if let queue {
-            AudioQueueStop(queue, true)
-            AudioQueueDispose(queue, true)
-            self.queue = nil
-        }
-        queueBuffers.removeAll()
+        outputSinks.forEach { $0.stop() }
+        outputSinks.removeAll()
 
         if aggregateDeviceID != kAudioObjectUnknown {
             if let ioProcID {
@@ -724,43 +741,19 @@ private nonisolated final class ProcessTapRouteSession {
         try check(AudioDeviceStart(aggregateDeviceID, createdIOProcID), "Start tap IOProc")
     }
 
-    private func startOutputQueue(format: AudioStreamBasicDescription) throws {
-        var outputQueue: AudioQueueRef?
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        var mutableFormat = format
-
-        try check(AudioQueueNewOutput(&mutableFormat, processTapOutputProc, context, nil, nil, 0, &outputQueue), "Create output AudioQueue")
-        guard let outputQueue else {
-            throw ProcessTapRouteError(message: "AudioQueue output could not be created")
+    private func startOutputSinks(format: AudioStreamBasicDescription) throws {
+        var startedSinks: [ProcessTapOutputSink] = []
+        do {
+            for target in outputTargets {
+                let sink = ProcessTapOutputSink(target: target)
+                try sink.start(format: format)
+                startedSinks.append(sink)
+            }
+            outputSinks = startedSinks
+        } catch {
+            startedSinks.forEach { $0.stop() }
+            throw error
         }
-
-        let targetUID = try readDeviceUID(deviceID: targetDeviceObjectID)
-        requestedOutputDeviceUID = targetUID
-        var uid = targetUID as CFString
-        try check(withUnsafePointer(to: &uid) { pointer in
-            AudioQueueSetProperty(
-                outputQueue,
-                kAudioQueueProperty_CurrentDevice,
-                pointer,
-                UInt32(MemoryLayout<CFString>.size)
-            )
-        }, "Set AudioQueue output device")
-        actualOutputDeviceUID = readAudioQueueCurrentDevice(outputQueue) ?? "unreadable"
-        AudioQueueSetParameter(outputQueue, kAudioQueueParam_Volume, 1.0)
-
-        let bytesPerFrame = max(Int(format.mBytesPerFrame), 8)
-        let bufferByteSize = UInt32(bytesPerFrame * 1024)
-        for _ in 0..<4 {
-            var buffer: AudioQueueBufferRef?
-            try check(AudioQueueAllocateBuffer(outputQueue, bufferByteSize, &buffer), "Allocate AudioQueue buffer")
-            guard let buffer else { continue }
-            queueBuffers.append(buffer)
-            fillOutputBuffer(buffer)
-            try check(AudioQueueEnqueueBuffer(outputQueue, buffer, 0, nil), "Prime AudioQueue buffer")
-        }
-
-        queue = outputQueue
-        try check(AudioQueueStart(outputQueue, nil), "Start output AudioQueue")
     }
 
     fileprivate func handleTapInput(_ inputData: UnsafePointer<AudioBufferList>?) {
@@ -815,27 +808,9 @@ private nonisolated final class ProcessTapRouteSession {
                 return
             }
 
-            ringBuffer.write(bytes: baseAddress.assumingMemoryBound(to: UInt8.self), count: rawBuffer.count)
+            writeToOutputSinks(bytes: baseAddress.assumingMemoryBound(to: UInt8.self), count: rawBuffer.count)
             capturedBytes += UInt64(rawBuffer.count)
         }
-    }
-
-    private func fillOutputBuffer(_ buffer: AudioQueueBufferRef) {
-        let capacity = Int(buffer.pointee.mAudioDataBytesCapacity)
-        let written = ringBuffer.read(into: buffer.pointee.mAudioData.assumingMemoryBound(to: UInt8.self), count: capacity)
-        playedBytes += UInt64(written)
-
-        if written < capacity {
-            underflowCount += 1
-            memset(buffer.pointee.mAudioData.advanced(by: written), 0, capacity - written)
-        }
-
-        buffer.pointee.mAudioDataByteSize = UInt32(capacity)
-    }
-
-    fileprivate func handleOutputBuffer(queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
-        fillOutputBuffer(buffer)
-        AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
     }
 
     private func shouldTreatInputAsPlanarFloat(buffers: UnsafeMutableAudioBufferListPointer) -> Bool {
@@ -884,8 +859,14 @@ private nonisolated final class ProcessTapRouteSession {
                 return
             }
 
-            ringBuffer.write(bytes: baseAddress.assumingMemoryBound(to: UInt8.self), count: rawBuffer.count)
+            writeToOutputSinks(bytes: baseAddress.assumingMemoryBound(to: UInt8.self), count: rawBuffer.count)
             capturedBytes += UInt64(rawBuffer.count)
+        }
+    }
+
+    private func writeToOutputSinks(bytes: UnsafePointer<UInt8>, count: Int) {
+        for sink in outputSinks {
+            sink.write(bytes: bytes, count: count)
         }
     }
 
@@ -904,25 +885,27 @@ private nonisolated final class ProcessTapRouteSession {
                 return
             }
 
-            NSLog(
-                "Xavucontrol process tap route %@ -> %@ sourceUID=%@ callbacks=%llu empty=%llu lastBuffers=%u lastBytes=%u captured=%llu played=%llu buffered=%d underflows=%llu peak=%.5f rms=%.5f requestedUID=%@ actualUID=%@ tapFormat=%@",
-                self.appName,
-                self.targetDeviceName,
-                self.sourceDeviceUID,
-                self.callbackCount,
-                self.emptyCallbackCount,
-                self.lastInputBufferCount,
-                self.lastInputByteSize,
-                self.capturedBytes,
-                self.playedBytes,
-                self.ringBuffer.availableBytes,
-                self.underflowCount,
-                self.peakLevel,
-                self.rmsLevel,
-                self.requestedOutputDeviceUID,
-                self.actualOutputDeviceUID,
-                self.formatSummary(self.tapFormat)
-            )
+            for sink in self.outputSinks {
+                NSLog(
+                    "Xavucontrol process tap fanout route %@ -> %@ sourceUID=%@ callbacks=%llu empty=%llu lastBuffers=%u lastBytes=%u captured=%llu played=%llu buffered=%d underflows=%llu peak=%.5f rms=%.5f requestedUID=%@ actualUID=%@ tapFormat=%@",
+                    self.appName,
+                    sink.targetDeviceName,
+                    self.sourceDeviceUID,
+                    self.callbackCount,
+                    self.emptyCallbackCount,
+                    self.lastInputBufferCount,
+                    self.lastInputByteSize,
+                    self.capturedBytes,
+                    sink.playedBytes,
+                    sink.bufferedBytes,
+                    sink.underflowCount,
+                    self.peakLevel,
+                    self.rmsLevel,
+                    sink.requestedOutputDeviceUID,
+                    sink.actualOutputDeviceUID,
+                    self.formatSummary(self.tapFormat)
+                )
+            }
         }
         diagnosticsTimer = timer
         timer.resume()
@@ -930,8 +913,9 @@ private nonisolated final class ProcessTapRouteSession {
 
     private func createAggregateDevice(tapUID: String) throws -> AudioObjectID {
         let aggregateUID = "org.moroz.xavucontrol.tap.\(streamID).\(UUID().uuidString)"
+        let targetNames = outputTargets.map(\.name).joined(separator: ", ")
         let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Xavucontrol Tap - \(appName) to \(targetDeviceName)",
+            kAudioAggregateDeviceNameKey: "Xavucontrol Tap - \(appName) to \(targetNames)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapListKey: [
@@ -974,21 +958,6 @@ private nonisolated final class ProcessTapRouteSession {
         var dataSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         try check(AudioObjectGetPropertyData(tapID, &address, 0, nil, &dataSize, &format), "Read tap format")
         return format
-    }
-
-    private func readDeviceUID(deviceID: AudioObjectID) throws -> String {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceUID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var value: CFString = "" as CFString
-        var dataSize = UInt32(MemoryLayout<CFString>.size)
-        try check(withUnsafeMutablePointer(to: &value) { pointer in
-            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, pointer)
-        }, "Read target device UID")
-        return value as String
     }
 
     private func updateInterleavedFloatLevels(data: UnsafeMutableRawPointer, byteCount: Int) {
@@ -1054,7 +1023,7 @@ private nonisolated final class ProcessTapRouteSession {
         }
     }
 
-    private static func describe(status: OSStatus) -> String {
+    fileprivate static func describe(status: OSStatus) -> String {
         let code = UInt32(bitPattern: status)
         let bytes = [
             UInt8((code >> 24) & 0xff),
@@ -1072,6 +1041,142 @@ private nonisolated final class ProcessTapRouteSession {
         }
 
         return "\(status)"
+    }
+}
+
+private nonisolated final class ProcessTapOutputSink {
+    let targetDeviceID: AudioDevice.ID
+    let targetDeviceName: String
+    private let targetDeviceObjectID: AudioObjectID
+    private let ringBuffer = ByteRingBuffer(capacity: 48_000 * 4 * 4)
+    private var queue: AudioQueueRef?
+    private var queueBuffers: [AudioQueueBufferRef] = []
+    private(set) var requestedOutputDeviceUID = ""
+    private(set) var actualOutputDeviceUID = ""
+    private(set) var playedBytes: UInt64 = 0
+    private(set) var underflowCount: UInt64 = 0
+
+    var bufferedBytes: Int {
+        ringBuffer.availableBytes
+    }
+
+    init(target: ProcessTapOutputTarget) {
+        targetDeviceID = target.deviceID
+        targetDeviceName = target.name
+        targetDeviceObjectID = target.objectID
+    }
+
+    deinit {
+        stop()
+    }
+
+    func start(format: AudioStreamBasicDescription) throws {
+        var outputQueue: AudioQueueRef?
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        var mutableFormat = format
+
+        try check(AudioQueueNewOutput(&mutableFormat, processTapOutputProc, context, nil, nil, 0, &outputQueue), "Create output AudioQueue")
+        guard let outputQueue else {
+            throw ProcessTapRouteError(message: "AudioQueue output could not be created")
+        }
+
+        let targetUID = try readDeviceUID(deviceID: targetDeviceObjectID)
+        requestedOutputDeviceUID = targetUID
+        var uid = targetUID as CFString
+        try check(withUnsafePointer(to: &uid) { pointer in
+            AudioQueueSetProperty(
+                outputQueue,
+                kAudioQueueProperty_CurrentDevice,
+                pointer,
+                UInt32(MemoryLayout<CFString>.size)
+            )
+        }, "Set AudioQueue output device")
+        actualOutputDeviceUID = readAudioQueueCurrentDevice(outputQueue) ?? "unreadable"
+        AudioQueueSetParameter(outputQueue, kAudioQueueParam_Volume, 1.0)
+
+        let bytesPerFrame = max(Int(format.mBytesPerFrame), 8)
+        let bufferByteSize = UInt32(bytesPerFrame * 1024)
+        for _ in 0..<4 {
+            var buffer: AudioQueueBufferRef?
+            try check(AudioQueueAllocateBuffer(outputQueue, bufferByteSize, &buffer), "Allocate AudioQueue buffer")
+            guard let buffer else { continue }
+            queueBuffers.append(buffer)
+            fillOutputBuffer(buffer)
+            try check(AudioQueueEnqueueBuffer(outputQueue, buffer, 0, nil), "Prime AudioQueue buffer")
+        }
+
+        queue = outputQueue
+        try check(AudioQueueStart(outputQueue, nil), "Start output AudioQueue")
+    }
+
+    func stop() {
+        if let queue {
+            AudioQueueStop(queue, true)
+            AudioQueueDispose(queue, true)
+            self.queue = nil
+        }
+        queueBuffers.removeAll()
+    }
+
+    func write(bytes: UnsafePointer<UInt8>, count: Int) {
+        ringBuffer.write(bytes: bytes, count: count)
+    }
+
+    fileprivate func handleOutputBuffer(queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
+        fillOutputBuffer(buffer)
+        AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
+    }
+
+    private func fillOutputBuffer(_ buffer: AudioQueueBufferRef) {
+        let capacity = Int(buffer.pointee.mAudioDataBytesCapacity)
+        let written = ringBuffer.read(into: buffer.pointee.mAudioData.assumingMemoryBound(to: UInt8.self), count: capacity)
+        playedBytes += UInt64(written)
+
+        if written < capacity {
+            underflowCount += 1
+            memset(buffer.pointee.mAudioData.advanced(by: written), 0, capacity - written)
+        }
+
+        buffer.pointee.mAudioDataByteSize = UInt32(capacity)
+    }
+
+    private func readDeviceUID(deviceID: AudioObjectID) throws -> String {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var value: CFString = "" as CFString
+        var dataSize = UInt32(MemoryLayout<CFString>.size)
+        try check(withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, pointer)
+        }, "Read target device UID")
+        return value as String
+    }
+
+    private func readAudioQueueCurrentDevice(_ queue: AudioQueueRef) -> String? {
+        var dataSize: UInt32 = 0
+        guard AudioQueueGetPropertySize(queue, kAudioQueueProperty_CurrentDevice, &dataSize) == noErr,
+              dataSize > 0 else {
+            return nil
+        }
+
+        var value: CFString = "" as CFString
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioQueueGetProperty(queue, kAudioQueueProperty_CurrentDevice, pointer, &dataSize)
+        }
+        guard status == noErr else {
+            return nil
+        }
+
+        return value as String
+    }
+
+    private func check(_ status: OSStatus, _ operation: String) throws {
+        guard status == noErr else {
+            throw ProcessTapRouteError(message: "\(operation) failed: \(ProcessTapRouteSession.describe(status: status))")
+        }
     }
 }
 
@@ -1155,6 +1260,6 @@ nonisolated private let processTapOutputProc: AudioQueueOutputCallback = { clien
         return
     }
 
-    let session = Unmanaged<ProcessTapRouteSession>.fromOpaque(clientData).takeUnretainedValue()
-    session.handleOutputBuffer(queue: queue, buffer: buffer)
+    let sink = Unmanaged<ProcessTapOutputSink>.fromOpaque(clientData).takeUnretainedValue()
+    sink.handleOutputBuffer(queue: queue, buffer: buffer)
 }

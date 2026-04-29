@@ -89,10 +89,10 @@ private struct PatchbayGraphBuilder {
 
         for stream in playbackStreams {
             let appNode = appNode(stream: stream, direction: .playback, side: .left)
-            let targetNodeID = playbackTargetNodeID(stream: stream)
+            let targetNodeIDs = playbackTargetNodeIDs(stream: stream)
 
             nodesByID[appNode.id] = appNode
-            if nodesByID[targetNodeID] != nil {
+            for targetNodeID in targetNodeIDs where nodesByID[targetNodeID] != nil {
                 links.append(contentsOf: stereoLinks(
                     sourceNodeID: appNode.id,
                     sourcePrefix: "out",
@@ -190,12 +190,10 @@ private struct PatchbayGraphBuilder {
         )
     }
 
-    private func playbackTargetNodeID(stream: AppAudioStream) -> PatchbayNode.ID {
-        let routeSelectionID = audioModel.routeSelectionID(for: stream)
-        if routeSelectionID == AppPreferences.defaultOutputRouteID {
-            return outputNodeID(applicationDefaultOutputDeviceID() ?? routeSelectionID)
+    private func playbackTargetNodeIDs(stream: AppAudioStream) -> [PatchbayNode.ID] {
+        audioModel.routeSelectionIDs(for: stream).map { routeSelectionID in
+            return outputNodeID(routeSelectionID)
         }
-        return outputNodeID(stream.requestedDeviceID ?? routeSelectionID)
     }
 
     private func recordingSourceNodeID(stream: AppAudioStream) -> PatchbayNode.ID {

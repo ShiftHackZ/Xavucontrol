@@ -79,14 +79,15 @@ struct StreamRow: View {
         showsStreamControls && audioModel.streamUsesXavucontrolVirtualDevice(stream)
     }
 
-    private var routeSelection: Binding<String> {
-        Binding(
-            get: { audioModel.routeSelectionID(for: stream) },
-            set: { targetDeviceID in
-                guard !targetDeviceID.isEmpty, !stream.isVirtualStream else { return }
-                audioModel.requestRoute(streamID: stream.id, targetDeviceID: targetDeviceID)
-            }
-        )
+    private var routeSelections: [String] {
+        audioModel.routeSelectionIDs(for: stream)
+    }
+
+    private var routeSummary: String {
+        let names = routeSelections.compactMap { selectionID in
+            devices.first(where: { $0.id == selectionID }).map(deviceTitle)
+        }
+        return names.isEmpty ? "No available output" : names.joined(separator: ", ")
     }
 
     private var muteBinding: Binding<Bool> {
@@ -158,14 +159,26 @@ struct StreamRow: View {
                     HStack(spacing: 8) {
                         Text("Route to:")
                             .frame(width: 76, alignment: .trailing)
-                        Picker("", selection: routeSelection) {
-                            Text("Default Output Device (\(audioModel.applicationDefaultOutputDeviceName()))")
-                                .tag(AppPreferences.defaultOutputRouteID)
+                        Menu {
                             ForEach(devices) { device in
-                                Text(device.name).tag(device.id)
+                                Button {
+                                    toggleOutputDevice(device.id)
+                                } label: {
+                                    let title = deviceTitle(device)
+                                    if routeSelections.contains(device.id) {
+                                        Label(title, systemImage: "checkmark")
+                                    } else {
+                                        Text(title)
+                                    }
+                                }
                             }
+                        } label: {
+                            Text(routeSummary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(minWidth: 280, alignment: .leading)
                         }
-                        .labelsHidden()
+                        .menuStyle(.borderlessButton)
                         .frame(minWidth: 280)
                         .disabled(stream.isVirtualStream)
                         Text(stream.routingStatus ?? (stream.isVirtualStream ? "Diagnostic stream" : "No routing request"))
@@ -221,6 +234,24 @@ struct StreamRow: View {
 
         let allDevices = stream.direction == .playback ? audioModel.outputDevices : audioModel.inputDevices
         return allDevices.first(where: { $0.id == assignedDeviceID })?.name ?? "Unknown device"
+    }
+
+    private func toggleOutputDevice(_ deviceID: AudioDevice.ID) {
+        guard !stream.isVirtualStream else {
+            return
+        }
+
+        audioModel.togglePlaybackRouteTarget(
+            preferenceKey: stream.preferenceKey,
+            targetDeviceID: deviceID
+        )
+    }
+
+    private func deviceTitle(_ device: AudioDevice) -> String {
+        if audioModel.isApplicationDefaultOutputDevice(device) {
+            return "\(device.name) (Xavucontrol Default Output)"
+        }
+        return device.name
     }
 }
 
