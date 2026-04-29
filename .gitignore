@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode user/local state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# Xcode / Swift build products
+DerivedData/
+build/
+.build/
+/Driver/build/
+/Xavucontrol/build/
+/Packages/
+
+# SwiftPM / Xcode-generated local workspace state
+.swiftpm/
+
+# Signing, credentials, and local environment
+.netrc
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.xcconfig.local
+.env
+.env.*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
