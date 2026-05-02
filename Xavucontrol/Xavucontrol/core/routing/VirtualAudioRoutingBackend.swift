@@ -34,14 +34,26 @@ struct VirtualAudioRoutingBackend: RoutingBackend {
         stream: AppAudioStream,
         targetDevice: AudioDevice
     ) async -> RoutingBackendResult {
+        await apply(routeRequests: [routeRequest], stream: stream, targetDevices: [targetDevice])
+    }
+
+    func apply(
+        routeRequests: [AudioRouteRequest],
+        stream: AppAudioStream,
+        targetDevices: [AudioDevice]
+    ) async -> RoutingBackendResult {
         guard !stream.isVirtualStream else {
             return .unsupported("Virtual streams are diagnostic Xavucontrol outputs and cannot be routed by the POC backend")
         }
 
         if stream.direction == .playback {
+            guard !targetDevices.isEmpty else {
+                return .failed("No output devices selected")
+            }
+
             do {
-                await VirtualCableRoutingService.shared.stopAll()
-                let summary = try await ProcessTapRoutingService.shared.routeConfirmed(stream: stream, to: targetDevice)
+                await VirtualCableRoutingService.shared.stop(streamID: stream.id)
+                let summary = try await ProcessTapRoutingService.shared.routeConfirmed(stream: stream, to: targetDevices)
                 return .applied(summary)
             } catch {
                 let virtualProbeSourceUID = ProcessTapRoutingService.sourceDeviceUID(
@@ -60,6 +72,9 @@ struct VirtualAudioRoutingBackend: RoutingBackend {
                 }
 
                 do {
+                    guard let targetDevice = targetDevices.first else {
+                        return .failed("No output devices selected")
+                    }
                     let fallbackSummary = try await VirtualCableRoutingService.shared.route(stream: stream, to: targetDevice)
                     return .applied("\(fallbackSummary) Per-app process tap is not ready yet: \(error.localizedDescription). \(probeSummary)")
                 } catch {
@@ -69,11 +84,11 @@ struct VirtualAudioRoutingBackend: RoutingBackend {
         }
 
         let message = RoutingIPCMessage.setRoute(SetRouteMessage(
-            streamID: routeRequest.streamID,
+            streamID: routeRequests.first?.streamID ?? stream.id,
             processID: stream.processID,
-            direction: routeRequest.direction.rawValue,
-            targetDeviceID: targetDevice.id,
-            targetCoreAudioObjectID: targetDevice.coreAudioObjectID
+            direction: routeRequests.first?.direction.rawValue ?? stream.direction.rawValue,
+            targetDeviceID: targetDevices.first?.id ?? "",
+            targetCoreAudioObjectID: targetDevices.first?.coreAudioObjectID
         ))
 
         do {

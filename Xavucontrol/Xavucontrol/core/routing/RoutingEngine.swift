@@ -22,9 +22,29 @@ protocol RoutingBackend {
         targetDevice: AudioDevice
     ) async -> RoutingBackendResult
 
+    func apply(
+        routeRequests: [AudioRouteRequest],
+        stream: AppAudioStream,
+        targetDevices: [AudioDevice]
+    ) async -> RoutingBackendResult
+
     func setStreamVolume(stream: AppAudioStream, volume: Double) async -> RoutingBackendResult
 
     func setStreamMuted(stream: AppAudioStream, isMuted: Bool) async -> RoutingBackendResult
+}
+
+extension RoutingBackend {
+    func apply(
+        routeRequests: [AudioRouteRequest],
+        stream: AppAudioStream,
+        targetDevices: [AudioDevice]
+    ) async -> RoutingBackendResult {
+        guard let routeRequest = routeRequests.first,
+              let targetDevice = targetDevices.first else {
+            return .failed("No output devices selected")
+        }
+        return await apply(routeRequest: routeRequest, stream: stream, targetDevice: targetDevice)
+    }
 }
 
 struct RoutingEngine {
@@ -44,6 +64,14 @@ struct RoutingEngine {
         targetDevice: AudioDevice
     ) async -> RoutingBackendResult {
         await backend.apply(routeRequest: routeRequest, stream: stream, targetDevice: targetDevice)
+    }
+
+    func apply(
+        routeRequests: [AudioRouteRequest],
+        stream: AppAudioStream,
+        targetDevices: [AudioDevice]
+    ) async -> RoutingBackendResult {
+        await backend.apply(routeRequests: routeRequests, stream: stream, targetDevices: targetDevices)
     }
 
     func setStreamVolume(stream: AppAudioStream, volume: Double) async -> RoutingBackendResult {
@@ -85,6 +113,18 @@ struct DirectCoreAudioRoutingBackend: RoutingBackend {
         .unsupported(
             "Direct Core Audio exposes process/device state, but not PulseAudio-style per-app stream routing. Route request saved for future virtual-device backend."
         )
+    }
+
+    func apply(
+        routeRequests: [AudioRouteRequest],
+        stream: AppAudioStream,
+        targetDevices: [AudioDevice]
+    ) async -> RoutingBackendResult {
+        guard let routeRequest = routeRequests.first,
+              let targetDevice = targetDevices.first else {
+            return .failed("No output devices selected")
+        }
+        return await apply(routeRequest: routeRequest, stream: stream, targetDevice: targetDevice)
     }
 
     func setStreamVolume(stream: AppAudioStream, volume: Double) async -> RoutingBackendResult {

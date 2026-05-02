@@ -163,7 +163,9 @@ final class AudioModel: ObservableObject {
     private var realtimeObserver: CoreAudioRealtimeObserver?
     private var isRefreshingDevices = false
     private var isRefreshingStreams = false
-    private var routeGenerationByStreamID: [AppAudioStream.ID: Int] = [:]
+    private var routeGenerationByRouteID: [AudioRouteRequest.ID: Int] = [:]
+    private var activePlaybackRouteTargetIDsByPreferenceKey: [String: Set<AudioDevice.ID>] = [:]
+    private var activePlaybackRouteStreamIDByPreferenceKey: [String: AppAudioStream.ID] = [:]
 
     init() {
         outputDevices = []
@@ -279,6 +281,15 @@ final class AudioModel: ObservableObject {
                 updatedStream.requestedDeviceID = routeRequest.targetDeviceID
                 updatedStream.routingStatus = routeRequest.status.displayText
                 updatedStream.routeSelectionID = preferredRouteSelectionID(for: updatedStream)
+            } else if let activeTargetIDs = activePlaybackRouteTargetIDsByPreferenceKey[stream.preferenceKey],
+                      !activeTargetIDs.isEmpty,
+                      stream.direction == .playback {
+                updatedStream.requestedDeviceID = activeTargetIDs.first
+                updatedStream.routeSelectionID = preferredRouteSelectionID(for: updatedStream)
+                let targetNames = activeTargetIDs
+                    .compactMap { targetID in outputDevices.first(where: { $0.id == targetID })?.name }
+                    .sorted()
+                updatedStream.routingStatus = "Active route: \(targetNames.joined(separator: ", "))"
             } else if updatedStream.routeSelectionID == nil {
                 updatedStream.routeSelectionID = preferredRouteSelectionID(for: updatedStream)
             }
@@ -302,52 +313,126 @@ final class AudioModel: ObservableObject {
             return
         }
 
-        let selectedRouteID = targetDeviceID
-        let effectiveTargetDeviceID = effectiveOutputDeviceID(forRouteSelectionID: targetDeviceID)
-        if stream.direction == .playback {
-            if targetDeviceID == AppPreferences.defaultOutputRouteID {
-                preferenceStore.setStreamOutputDeviceID(nil, for: stream.preferenceKey)
-                appPreferences.streamOutputDeviceIDs.removeValue(forKey: stream.preferenceKey)
-            } else {
-                preferenceStore.setStreamOutputDeviceID(targetDeviceID, for: stream.preferenceKey)
-                appPreferences.streamOutputDeviceIDs[stream.preferenceKey] = targetDeviceID
-            }
-        }
+        requestPlaybackRouteTargets(streamIndex: streamIndex, routeSelectionIDs: [targetDeviceID])
+    }
 
-        let devices = stream.direction == .playback ? outputDevices : inputDevices
-        guard let targetDevice = devices.first(where: { $0.id == effectiveTargetDeviceID }) else {
-            streams[streamIndex].routingStatus = "Target device is no longer available"
-            streams[streamIndex].routeSelectionID = selectedRouteID
+    func requestPlaybackRouteTargets(streamID: AppAudioStream.ID, routeSelectionIDs: [AudioDevice.ID]) {
+        guard let streamIndex = streams.firstIndex(where: { $0.id == streamID }) else {
             return
         }
 
-        if let reason = routeReadinessMessage(stream: stream, targetDevice: targetDevice) {
-            streams[streamIndex].requestedDeviceID = targetDevice.id
-            streams[streamIndex].routeSelectionID = selectedRouteID
+        requestPlaybackRouteTargets(streamIndex: streamIndex, routeSelectionIDs: routeSelectionIDs)
+    }
+
+    func togglePlaybackRouteTarget(streamID: AppAudioStream.ID, targetDeviceID: AudioDevice.ID) {
+        guard let streamIndex = streams.firstIndex(where: { $0.id == streamID }) else {
+            return
+        }
+
+        let stream = streams[streamIndex]
+        togglePlaybackRouteTarget(preferenceKey: stream.preferenceKey, targetDeviceID: targetDeviceID)
+    }
+
+    func togglePlaybackRouteTarget(preferenceKey: String, targetDeviceID: AudioDevice.ID) {
+        let activeStreamID = activePlaybackRouteStreamIDByPreferenceKey[preferenceKey]
+        guard let streamIndex = streams.firstIndex(where: { $0.id == activeStreamID })
+            ?? streams.firstIndex(where: { $0.preferenceKey == preferenceKey && $0.direction == .playback && !$0.isVirtualStream }) else {
+            return
+        }
+
+        let stream = streams[streamIndex]
+        guard stream.direction == .playback,
+              routableOutputDevice(id: targetDeviceID) != nil else {
+            return
+        }
+
+        var selectedRouteIDs = preferredOutputRouteSelectionIDs(for: stream)
+        if selectedRouteIDs.contains(targetDeviceID) {
+            selectedRouteIDs.removeAll { $0 == targetDeviceID }
+        } else {
+            selectedRouteIDs.append(targetDeviceID)
+        }
+
+        NSLog(
+            "Xavucontrol playback route toggle %@ target=%@ selected=%@",
+            preferenceKey,
+            targetDeviceID,
+            selectedRouteIDs.joined(separator: ",")
+        )
+        requestPlaybackRouteTargets(streamIndex: streamIndex, routeSelectionIDs: selectedRouteIDs)
+    }
+
+    private func requestPlaybackRouteTargets(streamIndex: Int, routeSelectionIDs: [AudioDevice.ID]) {
+        let stream = streams[streamIndex]
+        guard stream.direction == .playback else {
+            return
+        }
+
+        let selectedRouteIDs = normalizedPlaybackRouteSelectionIDs(routeSelectionIDs)
+        if stream.direction == .playback {
+            if selectedRouteIDs.count == 1,
+               selectedRouteIDs.first == applicationDefaultOutputDevice()?.id {
+                preferenceStore.setStreamOutputDeviceID(nil, for: stream.preferenceKey)
+                preferenceStore.setStreamOutputTargetDeviceIDs(nil, for: stream.preferenceKey)
+                appPreferences.streamOutputDeviceIDs.removeValue(forKey: stream.preferenceKey)
+                appPreferences.streamOutputTargetDeviceIDs.removeValue(forKey: stream.preferenceKey)
+            } else {
+                preferenceStore.setStreamOutputDeviceID(nil, for: stream.preferenceKey)
+                preferenceStore.setStreamOutputTargetDeviceIDs(selectedRouteIDs, for: stream.preferenceKey)
+                appPreferences.streamOutputDeviceIDs.removeValue(forKey: stream.preferenceKey)
+                appPreferences.streamOutputTargetDeviceIDs[stream.preferenceKey] = selectedRouteIDs
+            }
+        }
+
+        let effectiveTargetDeviceIDs = effectiveOutputDeviceIDs(forRouteSelectionIDs: selectedRouteIDs)
+        let targetDevices = effectiveTargetDeviceIDs.compactMap { routableOutputDevice(id: $0) }
+        guard !targetDevices.isEmpty else {
+            streams[streamIndex].routingStatus = "Target device is no longer available"
+            streams[streamIndex].routeSelectionID = selectedRouteIDs.first
+            return
+        }
+
+        if let reason = targetDevices.compactMap({ routeReadinessMessage(stream: stream, targetDevice: $0) }).first {
+            streams[streamIndex].requestedDeviceID = targetDevices.first?.id
+            streams[streamIndex].routeSelectionID = selectedRouteIDs.first
             streams[streamIndex].routingStatus = reason
             routingStatus = reason
             return
         }
 
-        let routeRequest = AudioRouteRequest(
-            streamID: stream.id,
-            direction: stream.direction,
-            targetDeviceID: targetDevice.id,
-            status: .pending
+        NSLog(
+            "Xavucontrol playback route request %@ selected=%@ targets=%d [%@]",
+            stream.preferenceKey,
+            selectedRouteIDs.joined(separator: ","),
+            targetDevices.count,
+            targetDevices.map(\.name).joined(separator: ", ")
         )
-        let routeGeneration = nextRouteGeneration(streamID: stream.id)
-        upsertRouteRequest(routeRequest)
-
-        streams[streamIndex].requestedDeviceID = targetDevice.id
-        streams[streamIndex].routeSelectionID = selectedRouteID
+        streams[streamIndex].requestedDeviceID = targetDevices.first?.id
+        streams[streamIndex].routeSelectionID = selectedRouteIDs.first
         streams[streamIndex].routingStatus = RoutingStatus.pending.displayText
         routingStatus = RoutingStatus.pending.displayText
 
-        Task {
-            await applyRoute(
-                routeRequest: routeRequest,
+        stopDuplicatePlaybackRoutes(preferenceKey: stream.preferenceKey, keepingStreamID: stream.id)
+        activePlaybackRouteTargetIDsByPreferenceKey[stream.preferenceKey] = Set(targetDevices.map(\.id))
+        activePlaybackRouteStreamIDByPreferenceKey[stream.preferenceKey] = stream.id
+        routeRequests.removeAll { $0.streamID == stream.id }
+        let requests = targetDevices.map { targetDevice in
+            AudioRouteRequest(
                 streamID: stream.id,
+                direction: stream.direction,
                 targetDeviceID: targetDevice.id,
+                status: .pending
+            )
+        }
+        requests.forEach(upsertRouteRequest)
+        let routeGeneration = nextRouteGeneration(routeID: stream.preferenceKey)
+
+        Task {
+            await applyRoutes(
+                routeRequests: requests,
+                streamID: stream.id,
+                preferenceKey: stream.preferenceKey,
+                targetDeviceIDs: targetDevices.map(\.id),
                 routeGeneration: routeGeneration
             )
         }
@@ -520,6 +605,13 @@ final class AudioModel: ObservableObject {
         stream.routeSelectionID ?? preferredRouteSelectionID(for: stream)
     }
 
+    func routeSelectionIDs(for stream: AppAudioStream) -> [AudioDevice.ID] {
+        guard stream.direction == .playback else {
+            return [routeSelectionID(for: stream)]
+        }
+        return preferredOutputRouteSelectionIDs(for: stream)
+    }
+
     func applicationDefaultOutputDeviceName() -> String {
         guard let device = applicationDefaultOutputDevice() else {
             return "No available output device"
@@ -548,7 +640,7 @@ final class AudioModel: ObservableObject {
         targetDeviceID: AudioDevice.ID,
         routeGeneration: Int
     ) async {
-        guard routeGenerationByStreamID[streamID] == routeGeneration else {
+        guard routeGenerationByRouteID[routeRequest.id] == routeGeneration else {
             return
         }
 
@@ -568,15 +660,49 @@ final class AudioModel: ObservableObject {
             stream: stream,
             targetDevice: targetDevice
         )
-        guard routeGenerationByStreamID[streamID] == routeGeneration else {
+        guard routeGenerationByRouteID[routeRequest.id] == routeGeneration else {
             return
         }
         updateRouteStatus(routeRequest: routeRequest, status: RoutingStatus(result: result))
     }
 
-    private func nextRouteGeneration(streamID: AppAudioStream.ID) -> Int {
-        let nextGeneration = (routeGenerationByStreamID[streamID] ?? 0) + 1
-        routeGenerationByStreamID[streamID] = nextGeneration
+    private func applyRoutes(
+        routeRequests: [AudioRouteRequest],
+        streamID: AppAudioStream.ID,
+        preferenceKey: String,
+        targetDeviceIDs: [AudioDevice.ID],
+        routeGeneration: Int
+    ) async {
+        guard routeGenerationByRouteID[preferenceKey] == routeGeneration else {
+            return
+        }
+
+        guard let stream = streams.first(where: { $0.id == streamID }) else {
+            return
+        }
+
+        let targetDevices = targetDeviceIDs.compactMap { targetDeviceID in
+            outputDevices.first(where: { $0.id == targetDeviceID })
+        }
+        guard !targetDevices.isEmpty else {
+            updateRouteStatuses(routeRequests: routeRequests, status: .failed("Target device is no longer available"))
+            return
+        }
+
+        let result = await routingEngine.apply(
+            routeRequests: routeRequests,
+            stream: stream,
+            targetDevices: targetDevices
+        )
+        guard routeGenerationByRouteID[preferenceKey] == routeGeneration else {
+            return
+        }
+        updateRouteStatuses(routeRequests: routeRequests, status: RoutingStatus(result: result))
+    }
+
+    private func nextRouteGeneration(routeID: AudioRouteRequest.ID) -> Int {
+        let nextGeneration = (routeGenerationByRouteID[routeID] ?? 0) + 1
+        routeGenerationByRouteID[routeID] = nextGeneration
         return nextGeneration
     }
 
@@ -672,11 +798,49 @@ final class AudioModel: ObservableObject {
             return AppPreferences.defaultInputRouteID
         }
 
-        if let preferredDeviceID = appPreferences.streamOutputDeviceIDs[stream.preferenceKey],
-           routableOutputDevice(id: preferredDeviceID) != nil {
-            return preferredDeviceID
+        return preferredOutputRouteSelectionIDs(for: stream).first ?? applicationDefaultOutputDevice()?.id ?? AppPreferences.defaultOutputRouteID
+    }
+
+    private func preferredOutputRouteSelectionIDs(for stream: AppAudioStream) -> [AudioDevice.ID] {
+        if let activeDeviceIDs = activePlaybackRouteTargetIDsByPreferenceKey[stream.preferenceKey],
+           !activeDeviceIDs.isEmpty {
+            let availableDeviceIDs = activeDeviceIDs.filter { routableOutputDevice(id: $0) != nil }
+            if !availableDeviceIDs.isEmpty {
+                return normalizedPlaybackRouteSelectionIDs(Array(availableDeviceIDs))
+            }
         }
-        return AppPreferences.defaultOutputRouteID
+
+        if let preferredDeviceIDs = appPreferences.streamOutputTargetDeviceIDs[stream.preferenceKey] {
+            let availableDeviceIDs = preferredDeviceIDs.filter { routableOutputDevice(id: $0) != nil }
+            if !availableDeviceIDs.isEmpty {
+                return normalizedPlaybackRouteSelectionIDs(availableDeviceIDs)
+            }
+        }
+
+        if appPreferences.streamOutputTargetDeviceIDs[stream.preferenceKey] == nil,
+           let preferredDeviceID = appPreferences.streamOutputDeviceIDs[stream.preferenceKey],
+           routableOutputDevice(id: preferredDeviceID) != nil {
+            return [preferredDeviceID]
+        }
+
+        guard let defaultOutputDevice = applicationDefaultOutputDevice() else {
+            return []
+        }
+        return [defaultOutputDevice.id]
+    }
+
+    private func normalizedPlaybackRouteSelectionIDs(_ routeSelectionIDs: [AudioDevice.ID]) -> [AudioDevice.ID] {
+        let nonEmptyIDs = routeSelectionIDs
+            .filter { !$0.isEmpty && $0 != AppPreferences.defaultOutputRouteID }
+        guard !nonEmptyIDs.isEmpty else {
+            return applicationDefaultOutputDevice().map { [$0.id] } ?? []
+        }
+
+        var uniqueIDs: [AudioDevice.ID] = []
+        for routeSelectionID in nonEmptyIDs where !uniqueIDs.contains(routeSelectionID) {
+            uniqueIDs.append(routeSelectionID)
+        }
+        return uniqueIDs
     }
 
     private func effectiveOutputDeviceID(forRouteSelectionID routeSelectionID: AudioDevice.ID) -> AudioDevice.ID {
@@ -684,6 +848,17 @@ final class AudioModel: ObservableObject {
             return applicationDefaultOutputDevice()?.id ?? routeSelectionID
         }
         return routeSelectionID
+    }
+
+    private func effectiveOutputDeviceIDs(forRouteSelectionIDs routeSelectionIDs: [AudioDevice.ID]) -> [AudioDevice.ID] {
+        var effectiveIDs: [AudioDevice.ID] = []
+        for routeSelectionID in normalizedPlaybackRouteSelectionIDs(routeSelectionIDs) {
+            let effectiveID = effectiveOutputDeviceID(forRouteSelectionID: routeSelectionID)
+            if !effectiveIDs.contains(effectiveID) {
+                effectiveIDs.append(effectiveID)
+            }
+        }
+        return effectiveIDs
     }
 
     private func effectiveInputDeviceID(forRouteSelectionID routeSelectionID: AudioDevice.ID) -> AudioDevice.ID {
@@ -730,32 +905,47 @@ final class AudioModel: ObservableObject {
     }
 
     private func applyPreferredRoutesToPlaybackStreams() {
-        for stream in streams where stream.direction == .playback && !stream.isVirtualStream {
-            let routeSelectionID = preferredRouteSelectionID(for: stream)
-            let targetDeviceID = effectiveOutputDeviceID(forRouteSelectionID: routeSelectionID)
-            guard routableOutputDevice(id: targetDeviceID) != nil else {
-                markRouteUnavailable(streamID: stream.id, routeSelectionID: routeSelectionID)
+        let routeablePlaybackGroups = Dictionary(
+            grouping: streams.filter { $0.direction == .playback && !$0.isVirtualStream },
+            by: \.preferenceKey
+        )
+
+        for groupedStreams in routeablePlaybackGroups.values {
+            guard let stream = groupedStreams.first(where: { candidate in
+                routeRequests.contains { $0.streamID == candidate.id }
+            }) ?? groupedStreams.first else {
                 continue
             }
 
-            if let existingRequest = routeRequests.first(where: { $0.streamID == stream.id }),
-               existingRequest.targetDeviceID == targetDeviceID {
+            let routeSelectionIDs = preferredOutputRouteSelectionIDs(for: stream)
+            let targetDeviceIDs = effectiveOutputDeviceIDs(forRouteSelectionIDs: routeSelectionIDs)
+            guard targetDeviceIDs.contains(where: { routableOutputDevice(id: $0) != nil }) else {
+                markRouteUnavailable(streamID: stream.id, routeSelectionID: routeSelectionIDs.first ?? AppPreferences.defaultOutputRouteID)
                 continue
             }
 
-            startRoute(streamID: stream.id, routeSelectionID: routeSelectionID, targetDeviceID: targetDeviceID)
+            let requestedTargetIDs = Set(targetDeviceIDs)
+            if activePlaybackRouteTargetIDsByPreferenceKey[stream.preferenceKey] == requestedTargetIDs,
+               activePlaybackRouteStreamIDByPreferenceKey[stream.preferenceKey] != nil {
+                continue
+            }
+
+            stopDuplicatePlaybackRoutes(preferenceKey: stream.preferenceKey, keepingStreamID: stream.id)
+            startRoutes(streamID: stream.id, routeSelectionIDs: routeSelectionIDs, targetDeviceIDs: targetDeviceIDs)
         }
     }
 
     private func rerouteDefaultPlaybackStreams() {
         for stream in streams where stream.direction == .playback && !stream.isVirtualStream {
-            guard appPreferences.streamOutputDeviceIDs[stream.preferenceKey] == nil else {
+            guard appPreferences.streamOutputDeviceIDs[stream.preferenceKey] == nil,
+                  appPreferences.streamOutputTargetDeviceIDs[stream.preferenceKey] == nil else {
                 continue
             }
-            startRoute(
+            let routeSelectionIDs = preferredOutputRouteSelectionIDs(for: stream)
+            startRoutes(
                 streamID: stream.id,
-                routeSelectionID: AppPreferences.defaultOutputRouteID,
-                targetDeviceID: effectiveOutputDeviceID(forRouteSelectionID: AppPreferences.defaultOutputRouteID)
+                routeSelectionIDs: routeSelectionIDs,
+                targetDeviceIDs: effectiveOutputDeviceIDs(forRouteSelectionIDs: routeSelectionIDs)
             )
         }
     }
@@ -795,46 +985,109 @@ final class AudioModel: ObservableObject {
     }
 
     private func startRoute(streamID: AppAudioStream.ID, routeSelectionID: AudioDevice.ID, targetDeviceID: AudioDevice.ID) {
+        startRoutes(streamID: streamID, routeSelectionIDs: [routeSelectionID], targetDeviceIDs: [targetDeviceID])
+    }
+
+    private func startRoutes(streamID: AppAudioStream.ID, routeSelectionIDs: [AudioDevice.ID], targetDeviceIDs: [AudioDevice.ID]) {
         guard let streamIndex = streams.firstIndex(where: { $0.id == streamID }) else {
             return
         }
 
         let stream = streams[streamIndex]
-        guard stream.direction == .playback,
-              let targetDevice = routableOutputDevice(id: targetDeviceID) else {
-            markRouteUnavailable(streamID: streamID, routeSelectionID: routeSelectionID)
+        let targetDevices = targetDeviceIDs.compactMap { routableOutputDevice(id: $0) }
+        guard stream.direction == .playback, !targetDevices.isEmpty else {
+            markRouteUnavailable(streamID: streamID, routeSelectionID: routeSelectionIDs.first ?? AppPreferences.defaultOutputRouteID)
             return
         }
 
-        if let reason = routeReadinessMessage(stream: stream, targetDevice: targetDevice) {
-            streams[streamIndex].requestedDeviceID = targetDevice.id
-            streams[streamIndex].routeSelectionID = routeSelectionID
+        if let reason = targetDevices.compactMap({ routeReadinessMessage(stream: stream, targetDevice: $0) }).first {
+            streams[streamIndex].requestedDeviceID = targetDevices.first?.id
+            streams[streamIndex].routeSelectionID = routeSelectionIDs.first
             streams[streamIndex].routingStatus = reason
             routingStatus = reason
             return
         }
 
-        let routeRequest = AudioRouteRequest(
-            streamID: stream.id,
-            direction: stream.direction,
-            targetDeviceID: targetDevice.id,
-            status: .pending
-        )
-        let routeGeneration = nextRouteGeneration(streamID: stream.id)
-        upsertRouteRequest(routeRequest)
-
-        streams[streamIndex].requestedDeviceID = targetDevice.id
-        streams[streamIndex].routeSelectionID = routeSelectionID
+        streams[streamIndex].requestedDeviceID = targetDevices.first?.id
+        streams[streamIndex].routeSelectionID = routeSelectionIDs.first
         streams[streamIndex].routingStatus = RoutingStatus.pending.displayText
         routingStatus = RoutingStatus.pending.displayText
 
-        Task {
-            await applyRoute(
-                routeRequest: routeRequest,
+        let requestedTargetIDs = Set(targetDevices.map(\.id))
+        activePlaybackRouteTargetIDsByPreferenceKey[stream.preferenceKey] = requestedTargetIDs
+        activePlaybackRouteStreamIDByPreferenceKey[stream.preferenceKey] = stream.id
+        routeRequests.removeAll { $0.streamID == stream.id }
+        let requests = targetDevices.map { targetDevice in
+            AudioRouteRequest(
                 streamID: stream.id,
+                direction: stream.direction,
                 targetDeviceID: targetDevice.id,
+                status: .pending
+            )
+        }
+        requests.forEach(upsertRouteRequest)
+        let routeGeneration = nextRouteGeneration(routeID: stream.preferenceKey)
+
+        Task {
+            await applyRoutes(
+                routeRequests: requests,
+                streamID: stream.id,
+                preferenceKey: stream.preferenceKey,
+                targetDeviceIDs: targetDevices.map(\.id),
                 routeGeneration: routeGeneration
             )
+        }
+    }
+
+    private func stopRemovedPlaybackRoutes(stream: AppAudioStream, activeTargetDeviceIDs: Set<AudioDevice.ID>) {
+        let staleRequests = routeRequests.filter {
+            $0.streamID == stream.id && !activeTargetDeviceIDs.contains($0.targetDeviceID)
+        }
+        guard !staleRequests.isEmpty else {
+            return
+        }
+
+        routeRequests.removeAll { request in
+            request.streamID == stream.id && !activeTargetDeviceIDs.contains(request.targetDeviceID)
+        }
+
+        Task {
+            for request in staleRequests {
+                await ProcessTapRoutingService.shared.stop(streamID: stream.id, targetDeviceID: request.targetDeviceID)
+                await VirtualCableRoutingService.shared.stop(streamID: stream.id)
+            }
+        }
+    }
+
+    private func stopDuplicatePlaybackRoutes(preferenceKey: String, keepingStreamID: AppAudioStream.ID) {
+        if let activeStreamID = activePlaybackRouteStreamIDByPreferenceKey[preferenceKey],
+           activeStreamID != keepingStreamID {
+            activePlaybackRouteStreamIDByPreferenceKey[preferenceKey] = keepingStreamID
+            Task {
+                await ProcessTapRoutingService.shared.stop(streamID: activeStreamID)
+                await VirtualCableRoutingService.shared.stop(streamID: activeStreamID)
+            }
+        }
+
+        let duplicateStreamIDs = streams
+            .filter {
+                $0.direction == .playback
+                    && !$0.isVirtualStream
+                    && $0.preferenceKey == preferenceKey
+                    && $0.id != keepingStreamID
+            }
+            .map(\.id)
+
+        guard !duplicateStreamIDs.isEmpty else {
+            return
+        }
+
+        routeRequests.removeAll { duplicateStreamIDs.contains($0.streamID) }
+        Task {
+            for duplicateStreamID in duplicateStreamIDs {
+                await ProcessTapRoutingService.shared.stop(streamID: duplicateStreamID)
+                await VirtualCableRoutingService.shared.stop(streamID: duplicateStreamID)
+            }
         }
     }
 
@@ -847,9 +1100,51 @@ final class AudioModel: ObservableObject {
         ))
 
         if let streamIndex = streams.firstIndex(where: { $0.id == routeRequest.streamID }) {
-            streams[streamIndex].requestedDeviceID = routeRequest.targetDeviceID
+            let streamRequests = routeRequests.filter { $0.streamID == routeRequest.streamID }
+            streams[streamIndex].requestedDeviceID = streamRequests.first?.targetDeviceID ?? routeRequest.targetDeviceID
             streams[streamIndex].routeSelectionID = preferredRouteSelectionID(for: streams[streamIndex])
-            streams[streamIndex].routingStatus = status.displayText
+            if streamRequests.count > 1 {
+                let activeCount = streamRequests.filter {
+                    if case .active = $0.status { return true }
+                    return false
+                }.count
+                let targetNames = streamRequests.compactMap { request in
+                    outputDevices.first(where: { $0.id == request.targetDeviceID })?.name
+                }
+                streams[streamIndex].routingStatus = "Multi-output route \(activeCount)/\(streamRequests.count): \(targetNames.joined(separator: ", "))"
+            } else {
+                streams[streamIndex].routingStatus = status.displayText
+            }
+        }
+        routingStatus = status.displayText
+    }
+
+    private func updateRouteStatuses(routeRequests: [AudioRouteRequest], status: RoutingStatus) {
+        for routeRequest in routeRequests {
+            upsertRouteRequest(AudioRouteRequest(
+                streamID: routeRequest.streamID,
+                direction: routeRequest.direction,
+                targetDeviceID: routeRequest.targetDeviceID,
+                status: status
+            ))
+        }
+
+        guard let firstRequest = routeRequests.first else {
+            routingStatus = status.displayText
+            return
+        }
+
+        if let streamIndex = streams.firstIndex(where: { $0.id == firstRequest.streamID }) {
+            streams[streamIndex].requestedDeviceID = routeRequests.first?.targetDeviceID
+            streams[streamIndex].routeSelectionID = preferredRouteSelectionID(for: streams[streamIndex])
+            if routeRequests.count > 1 {
+                let targetNames = routeRequests.compactMap { request in
+                    outputDevices.first(where: { $0.id == request.targetDeviceID })?.name
+                }
+                streams[streamIndex].routingStatus = "\(status.displayText) Outputs: \(targetNames.joined(separator: ", "))"
+            } else {
+                streams[streamIndex].routingStatus = status.displayText
+            }
         }
         routingStatus = status.displayText
     }

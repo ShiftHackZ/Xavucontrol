@@ -7,6 +7,7 @@ struct AppPreferences: Hashable {
     var defaultOutputDeviceID: AudioDevice.ID?
     var defaultInputDeviceID: AudioDevice.ID?
     var streamOutputDeviceIDs: [String: AudioDevice.ID]
+    var streamOutputTargetDeviceIDs: [String: [AudioDevice.ID]]
     var streamInputDeviceIDs: [String: AudioDevice.ID]
     var streamVolumes: [String: Double]
     var streamMutedStates: [String: Bool]
@@ -20,6 +21,7 @@ struct AppPreferenceStore {
         static let defaultOutputDeviceID = "preferences.defaultOutputDeviceID"
         static let defaultInputDeviceID = "preferences.defaultInputDeviceID"
         static let streamOutputDeviceIDs = "preferences.streamOutputDeviceIDs"
+        static let streamOutputTargetDeviceIDs = "preferences.streamOutputTargetDeviceIDs"
         static let streamInputDeviceIDs = "preferences.streamInputDeviceIDs"
         static let streamVolumes = "preferences.streamVolumes"
         static let streamMutedStates = "preferences.streamMutedStates"
@@ -35,10 +37,17 @@ struct AppPreferenceStore {
     }
 
     func load() -> AppPreferences {
-        AppPreferences(
+        let legacyOutputRoutes = defaults.dictionary(forKey: Key.streamOutputDeviceIDs) as? [String: String] ?? [:]
+        var outputTargetRoutes = defaults.dictionary(forKey: Key.streamOutputTargetDeviceIDs) as? [String: [String]] ?? [:]
+        for (preferenceKey, deviceID) in legacyOutputRoutes where outputTargetRoutes[preferenceKey] == nil {
+            outputTargetRoutes[preferenceKey] = [deviceID]
+        }
+
+        return AppPreferences(
             defaultOutputDeviceID: defaults.string(forKey: Key.defaultOutputDeviceID),
             defaultInputDeviceID: defaults.string(forKey: Key.defaultInputDeviceID),
-            streamOutputDeviceIDs: defaults.dictionary(forKey: Key.streamOutputDeviceIDs) as? [String: String] ?? [:],
+            streamOutputDeviceIDs: legacyOutputRoutes,
+            streamOutputTargetDeviceIDs: outputTargetRoutes,
             streamInputDeviceIDs: defaults.dictionary(forKey: Key.streamInputDeviceIDs) as? [String: String] ?? [:],
             streamVolumes: doubleDictionary(forKey: Key.streamVolumes),
             streamMutedStates: boolDictionary(forKey: Key.streamMutedStates),
@@ -72,6 +81,20 @@ struct AppPreferenceStore {
             routes.removeValue(forKey: preferenceKey)
         }
         defaults.set(routes, forKey: Key.streamOutputDeviceIDs)
+    }
+
+    func setStreamOutputTargetDeviceIDs(_ deviceIDs: [AudioDevice.ID]?, for preferenceKey: String) {
+        var routes = defaults.dictionary(forKey: Key.streamOutputTargetDeviceIDs) as? [String: [String]] ?? [:]
+        if let deviceIDs, !deviceIDs.isEmpty {
+            var uniqueDeviceIDs: [String] = []
+            for deviceID in deviceIDs where !uniqueDeviceIDs.contains(deviceID) {
+                uniqueDeviceIDs.append(deviceID)
+            }
+            routes[preferenceKey] = uniqueDeviceIDs
+        } else {
+            routes.removeValue(forKey: preferenceKey)
+        }
+        defaults.set(routes, forKey: Key.streamOutputTargetDeviceIDs)
     }
 
     func setStreamInputDeviceID(_ deviceID: AudioDevice.ID?, for preferenceKey: String) {
@@ -130,6 +153,7 @@ struct AppPreferenceStore {
         defaults.removeObject(forKey: Key.defaultOutputDeviceID)
         defaults.removeObject(forKey: Key.defaultInputDeviceID)
         defaults.removeObject(forKey: Key.streamOutputDeviceIDs)
+        defaults.removeObject(forKey: Key.streamOutputTargetDeviceIDs)
         defaults.removeObject(forKey: Key.streamInputDeviceIDs)
         defaults.removeObject(forKey: Key.streamVolumes)
         defaults.removeObject(forKey: Key.streamMutedStates)

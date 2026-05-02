@@ -3,6 +3,8 @@
 Xavucontrol is a native macOS audio routing and monitoring app inspired by the
 Linux `pavucontrol` experience.
 
+Project repository: [github.com/ShiftHackZ/Xavucontrol](https://github.com/ShiftHackZ/Xavucontrol)
+
 It is not affiliated with, endorsed by, or connected to the Linux `pavucontrol`
 project, PulseAudio, PipeWire, Apple, or any third-party audio vendor. The name
 and UX direction are used to communicate the goal: a practical per-application
@@ -19,6 +21,7 @@ system default device. That means simple workflows can become impossible:
 
 - play a browser or YouTube stream through MacBook speakers;
 - send Apple Music or foobar2000 to headphones;
+- duplicate one app's playback stream to multiple output devices at once;
 - monitor a microphone before recording;
 - combine multiple microphones into one virtual microphone;
 - mix selected playback audio into a virtual microphone for calls, recording,
@@ -46,9 +49,12 @@ output device Xavucontrol is routing them to.
 
 When a stream is running through `Xavucontrol Virtual Cable`, the app can manage
 its route, volume, mute state, and whether that stream should also be mixed into
-`Xavucontrol Virtual Mic`. Streams that are not currently on an Xavucontrol
-virtual device remain visible, but controls that cannot actually affect them are
-disabled.
+`Xavucontrol Virtual Mic`. A playback stream can be routed to one output device
+or fanned out to several hardware outputs at the same time, for example browser
+audio on both MacBook speakers and headphones.
+
+Streams that are not currently on an Xavucontrol virtual device remain visible,
+but controls that cannot actually affect them are disabled.
 
 ![Playback](Public/assets/screenshots/Playback.png)
 
@@ -126,6 +132,7 @@ is actively seeing process tap routes.
 - Native macOS SwiftUI app.
 - Per-application playback discovery.
 - Per-application playback routing to different hardware output devices.
+- Per-application playback fan-out to multiple output devices at once.
 - Internal default output device preference independent from the macOS system
   default.
 - Per-stream playback volume and mute for streams routed through Xavucontrol.
@@ -150,8 +157,8 @@ Xavucontrol uses a hybrid approach:
 - Core Audio device and process APIs discover hardware devices and active apps.
 - A bundled Core Audio HAL driver exposes virtual devices to macOS.
 - Apps can output into `Xavucontrol Virtual Cable`.
-- Xavucontrol captures/processes those streams and plays them to selected real
-  outputs.
+- Xavucontrol captures/processes those streams and plays each app to one or more
+  selected real outputs.
 - Xavucontrol can also mix selected microphones and playback streams into
   `Xavucontrol Virtual Mic`.
 
@@ -164,15 +171,24 @@ flowchart LR
 
     VC --> Router["Xavucontrol routing engine"]
 
-    Router --> Out1["Real output device (MacBook Speakers)"]
-    Router --> Out2["Real output device (Headphones)"]
-    Router --> Out3["Real output device (USB audio interface)"]
+    Router --> FanoutA["App A route / fan-out"]
+    Router --> RouteB["App B route"]
 
-    Preferences["Xavucontrol preferences (per-app route, volume, mute)"] --> Router
+    FanoutA --> Out1["Real output device (MacBook Speakers)"]
+    FanoutA --> Out2["Real output device (Headphones)"]
+    FanoutA --> Out3["Real output device (USB audio interface)"]
+
+    RouteB --> Out2
+
+    Preferences["Xavucontrol preferences (per-app routes, fan-out targets, volume, mute)"] --> Router
 ```
 
 In this mode, macOS apps send audio to `Xavucontrol Virtual Cable`. Xavucontrol
-then routes each detected app stream to the selected real output device.
+then routes each detected app stream to the selected real output device or to
+multiple real output devices at once. This makes workflows possible that macOS
+does not normally expose as a single user-facing control, such as playing one
+browser stream through both built-in speakers and headphones while another app
+uses a different route.
 
 ### Virtual Microphone Mixer
 
