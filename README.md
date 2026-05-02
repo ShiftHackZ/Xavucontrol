@@ -50,7 +50,7 @@ its route, volume, mute state, and whether that stream should also be mixed into
 virtual device remain visible, but controls that cannot actually affect them are
 disabled.
 
-![Playback](Docs/Screenshots/Playback.png)
+![Playback](Public/assets/screenshots/Playback.png)
 
 ### Recording
 
@@ -63,7 +63,7 @@ keeps Recording focused on visibility: it answers "who is recording right now?"
 without pretending that macOS exposes PulseAudio-style per-app microphone
 routing.
 
-![Recording](Docs/Screenshots/Recording.png)
+![Recording](Public/assets/screenshots/Recording.png)
 
 ### Output Devices
 
@@ -77,7 +77,7 @@ Xavucontrol's internal app default output. The internal default is used as the
 first routing target for playback streams, so a user can keep one system default
 while still making Xavucontrol route new streams somewhere else.
 
-![Output Devices](Docs/Screenshots/Output.png)
+![Output Devices](Public/assets/screenshots/Output.png)
 
 ### Input Devices
 
@@ -90,7 +90,7 @@ For hardware inputs, `To Virtual Mic` adds that microphone to the shared
 plays a selected input through a selected hardware output so the user can check
 gain, noise, tone, or routing before a call or recording.
 
-![Input Devices](Docs/Screenshots/Input.png)
+![Input Devices](Public/assets/screenshots/Input.png)
 
 ### Patchbay
 
@@ -105,7 +105,7 @@ outputs, input monitoring links, and recording apps attached to input devices.
 Connections cannot be edited here yet; routing is controlled from the Playback
 and Input Devices tabs.
 
-![Patchbay](Docs/Screenshots/Patchbay.png)
+![Patchbay](Public/assets/screenshots/Patchbay.png)
 
 ### Setup
 
@@ -119,7 +119,7 @@ virtual cable and virtual mic are present, whether the system defaults point at
 them, whether microphone permission is granted, and whether the router backend
 is actively seeing process tap routes.
 
-![Setup](Docs/Screenshots/Setup.png)
+![Setup](Public/assets/screenshots/Setup.png)
 
 ## Features
 
@@ -213,6 +213,18 @@ permission.
 After installing or removing the driver, Core Audio may need to restart. In some
 cases, System Settings may keep a stale device list until the Sound pane is
 reopened, Core Audio is restarted, or the machine is rebooted.
+
+## Packaging
+
+Build a release DMG locally:
+
+```sh
+Scripts/package-dmg.sh
+```
+
+The script builds the Release app, renders a branded DMG background, lays out
+`Xavucontrol.app` next to an Applications shortcut, and writes the final image
+to `dist/Xavucontrol-0.0.1-beta.dmg`.
 
 ## License
 

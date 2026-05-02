@@ -9,6 +9,7 @@ xcuserdata/
 *.xccheckout
 *.xcscmblueprint
 *.moved-aside
+.idea
 
 # Xcode / Swift build products
 DerivedData/
@@ -17,6 +18,8 @@ build/
 /Driver/build/
 /Xavucontrol/build/
 /Packages/
+/dist/
+/Packaging/build/
 
 # SwiftPM / Xcode-generated local workspace state
 .swiftpm/

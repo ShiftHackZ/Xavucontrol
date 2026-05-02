@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xavucontrol - pavucontrol for macOS, Per-App Audio Routing</title>
+  <meta name="description" content="Xavucontrol is a pavucontrol-inspired macOS audio routing app. Route per-app audio, send one stream to multiple outputs, monitor microphones, and build a virtual mic mix.">
+  <meta name="keywords" content="pavucontrol for macOS, pavucontrol mac, macOS audio routing, per-app audio routing macOS, Core Audio router, virtual audio cable macOS, virtual microphone macOS, app audio to multiple outputs macOS">
+  <meta name="robots" content="index,follow">
+  <meta name="theme-color" content="#171316">
+  <meta property="og:title" content="Xavucontrol - pavucontrol-inspired audio routing for macOS">
+  <meta property="og:description" content="Per-app audio routing, multi-output fan-out, virtual cable, virtual microphone, monitoring, and patchbay-style visibility for macOS.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/app-icon.png">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preload" href="assets/screenshots/Patchbay.png" as="image">
+  <link rel="preload" href="assets/app-icon.png" as="image">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Xavucontrol home">
+      <img class="brand-icon" src="assets/app-icon.png" alt="" aria-hidden="true">
+      <span>Xavucontrol</span>
+    </a>
+    <nav class="nav" aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#download">Download</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <img class="hero-icon" src="assets/app-icon.png" alt="Xavucontrol app icon">
+        <p class="eyebrow">pavucontrol-inspired audio routing for macOS</p>
+        <h1 id="hero-title">Xavucontrol</h1>
+        <p class="hero-text">
+          Xavucontrol brings the Linux pavucontrol idea to Core Audio:
+          per-application playback routing, multi-output fan-out, a virtual
+          audio cable, a virtual microphone mixer, input monitoring, and a live
+          patchbay view for macOS.
+        </p>
+        <div class="hero-actions">
+          <a class="primary-action" href="https://github.com/ShiftHackZ/Xavucontrol/releases/latest">Download</a>
+          <a class="secondary-action" href="#screenshots">See the app</a>
+        </div>
+        <p class="compat-note">Native SwiftUI app. Source-available. Experimental beta.</p>
+      </div>
+      <figure class="hero-media">
+        <img src="assets/screenshots/Patchbay.png" alt="Xavucontrol Patchbay tab showing app audio routes, microphones, and output devices.">
+      </figure>
+    </section>
+
+    <section class="problem" aria-labelledby="problem-title">
+      <div>
+        <p class="eyebrow">Why pavucontrol for Mac?</p>
+        <h2 id="problem-title">Core Audio is powerful. Most app UIs are not.</h2>
+      </div>
+      <p>
+        macOS gives developers audio APIs, but users only get the controls an app chooses to expose.
+        If a browser, music player, meeting tool, or small utility does not include an output selector,
+        it follows the system default. Xavucontrol is built for people searching for a pavucontrol-like
+        Mac app: one place to inspect streams, route app audio, and monitor what Core Audio is doing.
+      </p>
+    </section>
+
+    <section id="features" class="feature-grid" aria-labelledby="features-title">
+      <div class="section-heading">
+        <p class="eyebrow">What it does</p>
+        <h2 id="features-title">One control room for macOS app audio.</h2>
+      </div>
+      <article>
+        <h3>Per-app audio routing</h3>
+        <p>Move browser audio to speakers, send a player to headphones, and keep each app on the output that makes sense.</p>
+      </article>
+      <article>
+        <h3>Multi-output fan-out</h3>
+        <p>Duplicate one app's playback stream to two or more hardware output devices at the same time.</p>
+      </article>
+      <article>
+        <h3>Virtual microphone mixer</h3>
+        <p>Mix selected microphones and selected playback streams into Xavucontrol Virtual Mic for calls, recording, and tests.</p>
+      </article>
+      <article>
+        <h3>Input monitoring</h3>
+        <p>Use Listen On to check a microphone through a chosen output before joining a call or starting a recording.</p>
+      </article>
+      <article>
+        <h3>Patchbay visibility</h3>
+        <p>See active applications, devices, virtual routes, monitor links, and microphone sources in one readonly graph.</p>
+      </article>
+      <article>
+        <h3>Menu bar routing</h3>
+        <p>Close the main window while the routing process keeps running in the background.</p>
+      </article>
+    </section>
+
+    <section id="pipeline" class="pipeline" aria-labelledby="pipeline-title">
+      <div class="section-heading">
+        <p class="eyebrow">Audio pipeline</p>
+        <h2 id="pipeline-title">Virtual devices outside, routing engine inside.</h2>
+      </div>
+      <div class="pipeline-board" role="img" aria-label="Apps feed Xavucontrol Virtual Cable, Xavucontrol routes each stream to selected outputs, and selected sources feed Xavucontrol Virtual Mic.">
+        <div class="node input">Apps<br><span>Browser, player, DAW</span></div>
+        <div class="connector"></div>
+        <div class="node virtual">Virtual Cable<br><span>Core Audio HAL device</span></div>
+        <div class="connector"></div>
+        <div class="node router">Routing Engine<br><span>Routes, volume, fan-out</span></div>
+        <div class="connector split"></div>
+        <div class="node output">Outputs<br><span>Speakers, headphones, USB</span></div>
+        <div class="node mic">Virtual Mic<br><span>Mics + playback mix</span></div>
+      </div>
+    </section>
+
+    <section id="screenshots" class="screenshots" aria-labelledby="screenshots-title">
+      <div class="section-heading">
+        <p class="eyebrow">Screenshots</p>
+        <h2 id="screenshots-title">A practical interface, not a toy demo.</h2>
+      </div>
+      <div class="shot-grid">
+        <figure>
+          <img src="assets/screenshots/Playback.png" alt="Playback tab with per-application routing controls.">
+          <figcaption><strong>Playback</strong><span>Route apps, control routed volume, mute streams, and send playback into Virtual Mic.</span></figcaption>
+        </figure>
+        <figure>
+          <img src="assets/screenshots/Patchbay.png" alt="Patchbay tab with nodes and route lines.">
+          <figcaption><strong>Patchbay</strong><span>Readonly Helvum-inspired graph for live routes and devices.</span></figcaption>
+        </figure>
+        <figure>
+          <img src="assets/screenshots/Input.png" alt="Input Devices tab with microphones and Listen On controls.">
+          <figcaption><strong>Input Devices</strong><span>Choose Virtual Mic sources and monitor hardware inputs.</span></figcaption>
+        </figure>
+        <figure>
+          <img src="assets/screenshots/Output.png" alt="Output Devices tab with device volume and default controls.">
+          <figcaption><strong>Output Devices</strong><span>Manage hardware outputs, system defaults, and the app default route.</span></figcaption>
+        </figure>
+        <figure>
+          <img src="assets/screenshots/Recording.png" alt="Recording tab showing applications currently using microphone input.">
+          <figcaption><strong>Recording</strong><span>Readonly visibility into apps currently asking for microphone input.</span></figcaption>
+        </figure>
+        <figure>
+          <img src="assets/screenshots/Setup.png" alt="Setup tab with virtual driver and diagnostics controls.">
+          <figcaption><strong>Setup</strong><span>Install the driver, request permissions, set defaults, and inspect diagnostics.</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="download" class="download" aria-labelledby="download-title">
+      <div>
+        <p class="eyebrow">Download</p>
+        <h2 id="download-title">Get the latest release.</h2>
+      </div>
+      <div>
+        <p>
+          Xavucontrol is distributed through GitHub releases. The project is still
+          early beta and uses a bundled Core Audio HAL driver, so read the release
+          notes before installing and expect changes while the audio pipeline matures.
+        </p>
+        <div class="download-actions">
+          <a class="primary-action" href="https://github.com/ShiftHackZ/Xavucontrol/releases/latest">Download</a>
+          <a class="secondary-action" href="https://github.com/ShiftHackZ/Xavucontrol">View on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div>
+      <p>Copyright © 2026 Xavucontrol.</p>
+    </div>
+    <nav class="footer-links" aria-label="Legal and project links">
+      <a href="https://github.com/ShiftHackZ/Xavucontrol/blob/main/LICENSE.md">License Agreement</a>
+    </nav>
+  </footer>
+</body>
+</html>
