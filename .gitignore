@@ -9,6 +9,7 @@ xcuserdata/
 *.xccheckout
 *.xcscmblueprint
 *.moved-aside
+.idea
 
 # Xcode / Swift build products
 DerivedData/
