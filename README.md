@@ -214,6 +214,18 @@ After installing or removing the driver, Core Audio may need to restart. In some
 cases, System Settings may keep a stale device list until the Sound pane is
 reopened, Core Audio is restarted, or the machine is rebooted.
 
+## Packaging
+
+Build a release DMG locally:
+
+```sh
+Scripts/package-dmg.sh
+```
+
+The script builds the Release app, renders a branded DMG background, lays out
+`Xavucontrol.app` next to an Applications shortcut, and writes the final image
+to `dist/Xavucontrol-0.0.1-beta.dmg`.
+
 ## License
 
 This project is source-available, not open source.

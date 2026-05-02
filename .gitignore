@@ -18,6 +18,8 @@ build/
 /Driver/build/
 /Xavucontrol/build/
 /Packages/
+/dist/
+/Packaging/build/
 
 # SwiftPM / Xcode-generated local workspace state
 .swiftpm/
