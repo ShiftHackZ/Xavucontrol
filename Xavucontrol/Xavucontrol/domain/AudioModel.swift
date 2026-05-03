@@ -128,8 +128,15 @@ extension AudioDevice {
     }
 
     nonisolated var isXavucontrolVirtualEndpoint: Bool {
+        isXavucontrolVirtualCableEndpoint || isXavucontrolVirtualMicEndpoint
+    }
+
+    nonisolated var isXavucontrolVirtualCableEndpoint: Bool {
         name.localizedCaseInsensitiveContains(SetupState.virtualCableName)
-            || name.localizedCaseInsensitiveContains(SetupState.virtualMicName)
+    }
+
+    nonisolated var isXavucontrolVirtualMicEndpoint: Bool {
+        name.localizedCaseInsensitiveContains(SetupState.virtualMicName)
     }
 
     nonisolated var isXavucontrolTapDevice: Bool {
