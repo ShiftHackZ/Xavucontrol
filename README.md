@@ -1,4 +1,14 @@
-# Xavucontrol
+<p align="center">
+  <img src="Public/assets/app-icon.png" alt="Xavucontrol app icon" width="96" height="96">
+</p>
+
+<h1 align="center">Xavucontrol</h1>
+
+<p align="center">
+  <a href="https://github.com/ShiftHackZ/Xavucontrol/releases/latest">
+    <img src="https://img.shields.io/github/v/release/ShiftHackZ/Xavucontrol?include_prereleases&label=latest%20release" alt="Latest GitHub release">
+  </a>
+</p>
 
 Xavucontrol is a native macOS audio routing and monitoring app inspired by the
 Linux `pavucontrol` experience.
@@ -72,6 +82,12 @@ Audio, including hardware outputs and the Xavucontrol virtual cable. Hardware
 devices expose volume and mute controls only when macOS reports that those
 properties are settable.
 
+`Xavucontrol Virtual Cable` also exposes its own macOS volume and mute controls.
+Unlike a speaker volume, this acts as a master input volume for audio entering
+the virtual cable. That means the macOS sound slider and keyboard volume keys
+can quickly attenuate or mute all routed playback before Xavucontrol fans it out
+to the selected output devices.
+
 This tab separates two defaults: the macOS system default output and
 Xavucontrol's internal app default output. The internal default is used as the
 first routing target for playback streams, so a user can keep one system default
@@ -129,6 +145,8 @@ is actively seeing process tap routes.
 - Internal default output device preference independent from the macOS system
   default.
 - Per-stream playback volume and mute for streams routed through Xavucontrol.
+- System-level volume and mute for `Xavucontrol Virtual Cable`, used as a
+  master input volume for routed playback.
 - Virtual output device: `Xavucontrol Virtual Cable`.
 - Virtual input device: `Xavucontrol Virtual Mic`.
 - Multi-source virtual microphone mixer.
@@ -163,6 +181,7 @@ flowchart LR
     AppB["App B (Another audio app)"] --> VC
 
     VC --> Router["Xavucontrol routing engine"]
+    SystemVolume["macOS volume keys / system mute (Virtual Cable master input volume)"] --> VC
 
     Router --> Out1["Real output device (MacBook Speakers)"]
     Router --> Out2["Real output device (Headphones)"]
@@ -172,7 +191,10 @@ flowchart LR
 ```
 
 In this mode, macOS apps send audio to `Xavucontrol Virtual Cable`. Xavucontrol
-then routes each detected app stream to the selected real output device.
+then routes each detected app stream to the selected real output device. The
+virtual cable's system volume and mute are applied as a master input gain, while
+Xavucontrol's per-stream volume and mute remain available for individual routed
+applications.
 
 ### Virtual Microphone Mixer
 

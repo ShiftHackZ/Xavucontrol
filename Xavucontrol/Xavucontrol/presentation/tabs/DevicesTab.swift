@@ -70,7 +70,15 @@ struct DeviceRow: View {
         !device.isXavucontrolTapDevice
     }
 
+    private var isOutputVirtualCable: Bool {
+        kind == .output && device.isXavucontrolVirtualCableEndpoint
+    }
+
     private var showsLevelControls: Bool {
+        !device.isXavucontrolVirtualDevice || isOutputVirtualCable
+    }
+
+    private var showsAppDefaultControl: Bool {
         !device.isXavucontrolVirtualDevice
     }
 
@@ -157,7 +165,7 @@ struct DeviceRow: View {
                                 }
                                 .disabled(device.isDefault)
 
-                                if showsLevelControls {
+                                if showsAppDefaultControl {
                                     Button {
                                         setApplicationDefault(device)
                                     } label: {
@@ -238,6 +246,17 @@ struct DeviceRow: View {
                     Text(kind.volumeLabel)
                         .frame(width: 112, alignment: .trailing)
                     Text("Not controllable by macOS")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
+            if isOutputVirtualCable {
+                HStack(spacing: 8) {
+                    Text("Role:")
+                        .frame(width: 112, alignment: .trailing)
+                    Text("Master input volume for audio entering Xavucontrol Virtual Cable.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Spacer()

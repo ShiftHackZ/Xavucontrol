@@ -2,6 +2,8 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
+nonisolated(unsafe) private let xavucontrolVirtualCableDeviceUID = "org.moroz.xavucontrol.virtualcable.device"
+
 struct ProcessTapRouteError: Error, LocalizedError {
     let message: String
 
@@ -13,7 +15,7 @@ struct ProcessTapRouteError: Error, LocalizedError {
 actor ProcessTapRoutingService {
     static let shared = ProcessTapRoutingService()
 
-    private static let virtualCableDeviceUID = "org.moroz.xavucontrol.virtualcable.device"
+    private static let virtualCableDeviceUID = xavucontrolVirtualCableDeviceUID
 
     private var sessions: [String: ProcessTapRouteSession] = [:]
 
@@ -337,6 +339,135 @@ actor ProcessTapRoutingService {
     }
 }
 
+private struct VirtualCableOutputControlState {
+    let volume: Float32
+    let isMuted: Bool
+
+    static func current(deviceUID: String) -> VirtualCableOutputControlState? {
+        guard let deviceID = deviceID(forUID: deviceUID) else {
+            return nil
+        }
+
+        let volume = readFloat32(
+            objectID: deviceID,
+            selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            scope: kAudioDevicePropertyScopeOutput,
+            element: kAudioObjectPropertyElementMain
+        ) ?? readFloat32(
+            objectID: deviceID,
+            selector: kAudioDevicePropertyVolumeScalar,
+            scope: kAudioDevicePropertyScopeOutput,
+            element: kAudioObjectPropertyElementMain
+        ) ?? 1
+
+        let muted = readUInt32(
+            objectID: deviceID,
+            selector: kAudioDevicePropertyMute,
+            scope: kAudioDevicePropertyScopeOutput,
+            element: kAudioObjectPropertyElementMain
+        ).map { $0 != 0 } ?? false
+
+        return VirtualCableOutputControlState(
+            volume: max(0, min(1, volume)),
+            isMuted: muted
+        )
+    }
+
+    private static func deviceID(forUID uid: String) -> AudioObjectID? {
+        allDeviceIDs().first { deviceID in
+            readDeviceUID(deviceID: deviceID) == uid
+        }
+    }
+
+    private static func allDeviceIDs() -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize) == noErr else {
+            return []
+        }
+
+        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = Array(repeating: AudioObjectID(kAudioObjectUnknown), count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceIDs) == noErr else {
+            return []
+        }
+        return deviceIDs.filter { $0 != kAudioObjectUnknown }
+    }
+
+    private static func readDeviceUID(deviceID: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var value: CFString = "" as CFString
+        var dataSize = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, pointer)
+        }
+        guard status == noErr else {
+            return nil
+        }
+        return value as String
+    }
+
+    private static func readFloat32(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        element: AudioObjectPropertyElement
+    ) -> Float32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: element
+        )
+
+        guard AudioObjectHasProperty(objectID, &address) else {
+            return nil
+        }
+
+        var value = Float32.zero
+        var dataSize = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &dataSize, &value)
+        guard status == noErr else {
+            return nil
+        }
+        return value
+    }
+
+    private static func readUInt32(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        element: AudioObjectPropertyElement
+    ) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: element
+        )
+
+        guard AudioObjectHasProperty(objectID, &address) else {
+            return nil
+        }
+
+        var value: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &dataSize, &value)
+        guard status == noErr else {
+            return nil
+        }
+        return value
+    }
+}
+
 private nonisolated final class ProcessTapProbeSession {
     private let sourceDeviceUID: String
     private var tapFormat = AudioStreamBasicDescription()
@@ -594,6 +725,9 @@ private nonisolated final class ProcessTapRouteSession {
     private let controlLock = NSLock()
     private var volumeGain: Float32 = 1
     private var muted = false
+    private var virtualCableVolumeGain: Float32 = 1
+    private var virtualCableMuted = false
+    private var virtualCableControlTimer: DispatchSourceTimer?
 
     init(
         streamID: String,
@@ -651,8 +785,10 @@ private nonisolated final class ProcessTapRouteSession {
         }
         outputFormat = ProcessTapRouteSession.outputFormat(sampleRate: tapFormat.mSampleRate)
 
+        refreshVirtualCableControlState()
         try startOutputQueue(format: outputFormat)
         try startTapInput()
+        startVirtualCableControlMonitorIfNeeded()
         startDiagnosticsTimer()
         didStart = true
     }
@@ -686,6 +822,8 @@ private nonisolated final class ProcessTapRouteSession {
     func stop() {
         diagnosticsTimer?.cancel()
         diagnosticsTimer = nil
+        virtualCableControlTimer?.cancel()
+        virtualCableControlTimer = nil
 
         if let queue {
             AudioQueueStop(queue, true)
@@ -891,9 +1029,36 @@ private nonisolated final class ProcessTapRouteSession {
 
     private func currentGain() -> Float32 {
         controlLock.lock()
-        let gain = muted ? Float32.zero : volumeGain
+        let streamGain = muted ? Float32.zero : volumeGain
+        let virtualCableGain = virtualCableMuted ? Float32.zero : virtualCableVolumeGain
         controlLock.unlock()
-        return gain
+        return streamGain * virtualCableGain
+    }
+
+    private func startVirtualCableControlMonitorIfNeeded() {
+        guard sourceDeviceUID == xavucontrolVirtualCableDeviceUID else {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            self?.refreshVirtualCableControlState()
+        }
+        virtualCableControlTimer = timer
+        timer.resume()
+    }
+
+    private func refreshVirtualCableControlState() {
+        guard sourceDeviceUID == xavucontrolVirtualCableDeviceUID,
+              let state = VirtualCableOutputControlState.current(deviceUID: sourceDeviceUID) else {
+            return
+        }
+
+        controlLock.lock()
+        virtualCableVolumeGain = state.volume
+        virtualCableMuted = state.isMuted
+        controlLock.unlock()
     }
 
     private func startDiagnosticsTimer() {
