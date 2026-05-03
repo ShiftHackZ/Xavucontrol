@@ -11,7 +11,7 @@ struct ContentView: View {
     var body: some View {
         MainWindow()
             .environmentObject(AudioModel())
-            .frame(minWidth: 860, minHeight: 560)
+            .frame(minWidth: 860, minHeight: 680)
     }
 }
 

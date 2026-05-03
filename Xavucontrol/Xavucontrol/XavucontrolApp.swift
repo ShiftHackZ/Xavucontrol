@@ -24,7 +24,7 @@ struct XavucontrolApp: App {
         Window("Xavucontrol", id: "main") {
             MainWindow()
                 .environmentObject(audioModel)
-                .frame(minWidth: 860, minHeight: 560)
+                .frame(minWidth: 860, minHeight: 680)
         }
         .windowResizability(.contentMinSize)
         .commands {

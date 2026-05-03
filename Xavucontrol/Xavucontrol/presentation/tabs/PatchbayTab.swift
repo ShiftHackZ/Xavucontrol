@@ -400,9 +400,13 @@ private enum PatchbayLinkKind {
 }
 
 private struct PatchbayGraphView: View {
+    private static let defaultZoom: CGFloat = 0.8
+    private static let minimumZoom: CGFloat = 0.5
+    private static let maximumZoom: CGFloat = 1.8
+
     let graph: PatchbayGraph
 
-    @State private var zoom: CGFloat = 1
+    @State private var zoom: CGFloat = Self.defaultZoom
     @State private var nodeOrigins: [PatchbayNode.ID: CGPoint] = [:]
     @State private var dragStartOrigins: [PatchbayNode.ID: CGPoint] = [:]
     @State private var pinchStartZoom: CGFloat?
@@ -421,7 +425,7 @@ private struct PatchbayGraphView: View {
                 Spacer()
 
                 Button {
-                    zoom = max(0.5, zoom - 0.1)
+                    zoom = max(Self.minimumZoom, zoom - 0.1)
                 } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }
@@ -433,7 +437,7 @@ private struct PatchbayGraphView: View {
                     .frame(width: 44)
 
                 Button {
-                    zoom = min(1.8, zoom + 0.1)
+                    zoom = min(Self.maximumZoom, zoom + 0.1)
                 } label: {
                     Image(systemName: "plus.magnifyingglass")
                 }
@@ -441,7 +445,7 @@ private struct PatchbayGraphView: View {
 
                 Button {
                     withAnimation(.snappy(duration: 0.18)) {
-                        zoom = 1
+                        zoom = Self.defaultZoom
                         nodeOrigins = baseLayout.defaultOrigins
                     }
                 } label: {
@@ -535,7 +539,7 @@ private struct PatchbayGraphView: View {
                 }
 
                 let startZoom = pinchStartZoom ?? zoom
-                zoom = min(1.8, max(0.5, startZoom * magnification))
+                zoom = min(Self.maximumZoom, max(Self.minimumZoom, startZoom * magnification))
             }
             .onEnded { _ in
                 pinchStartZoom = nil

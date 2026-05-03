@@ -2,8 +2,6 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
-nonisolated(unsafe) private let xavucontrolVirtualCableDeviceUID = "org.moroz.xavucontrol.virtualcable.device"
-
 struct ProcessTapRouteError: Error, LocalizedError {
     let message: String
 
@@ -15,7 +13,7 @@ struct ProcessTapRouteError: Error, LocalizedError {
 actor ProcessTapRoutingService {
     static let shared = ProcessTapRoutingService()
 
-    private static let virtualCableDeviceUID = xavucontrolVirtualCableDeviceUID
+    private static let virtualCableDeviceUID = "org.moroz.xavucontrol.virtualcable.device"
 
     private var sessions: [String: ProcessTapRouteSession] = [:]
 
@@ -343,7 +341,7 @@ private struct VirtualCableOutputControlState {
     let volume: Float32
     let isMuted: Bool
 
-    static func current(deviceUID: String) -> VirtualCableOutputControlState? {
+    nonisolated static func current(deviceUID: String) -> VirtualCableOutputControlState? {
         guard let deviceID = deviceID(forUID: deviceUID) else {
             return nil
         }
@@ -373,13 +371,13 @@ private struct VirtualCableOutputControlState {
         )
     }
 
-    private static func deviceID(forUID uid: String) -> AudioObjectID? {
+    nonisolated private static func deviceID(forUID uid: String) -> AudioObjectID? {
         allDeviceIDs().first { deviceID in
             readDeviceUID(deviceID: deviceID) == uid
         }
     }
 
-    private static func allDeviceIDs() -> [AudioObjectID] {
+    nonisolated private static func allDeviceIDs() -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -399,7 +397,7 @@ private struct VirtualCableOutputControlState {
         return deviceIDs.filter { $0 != kAudioObjectUnknown }
     }
 
-    private static func readDeviceUID(deviceID: AudioObjectID) -> String? {
+    nonisolated private static func readDeviceUID(deviceID: AudioObjectID) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -417,7 +415,7 @@ private struct VirtualCableOutputControlState {
         return value as String
     }
 
-    private static func readFloat32(
+    nonisolated private static func readFloat32(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,
@@ -442,7 +440,7 @@ private struct VirtualCableOutputControlState {
         return value
     }
 
-    private static func readUInt32(
+    nonisolated private static func readUInt32(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,
@@ -694,6 +692,8 @@ private nonisolated final class ProcessTapProbeSession {
 }
 
 private nonisolated final class ProcessTapRouteSession {
+    private static let virtualCableDeviceUID = "org.moroz.xavucontrol.virtualcable.device"
+
     private let streamID: String
     private let processObjectIDs: [AudioObjectID]
     private let appName: String
@@ -1036,7 +1036,7 @@ private nonisolated final class ProcessTapRouteSession {
     }
 
     private func startVirtualCableControlMonitorIfNeeded() {
-        guard sourceDeviceUID == xavucontrolVirtualCableDeviceUID else {
+        guard sourceDeviceUID == Self.virtualCableDeviceUID else {
             return
         }
 
@@ -1050,7 +1050,7 @@ private nonisolated final class ProcessTapRouteSession {
     }
 
     private func refreshVirtualCableControlState() {
-        guard sourceDeviceUID == xavucontrolVirtualCableDeviceUID,
+        guard sourceDeviceUID == Self.virtualCableDeviceUID,
               let state = VirtualCableOutputControlState.current(deviceUID: sourceDeviceUID) else {
             return
         }
